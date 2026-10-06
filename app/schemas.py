@@ -510,3 +510,105 @@ class SupplierConfirmationStatistics(BaseModel):
 class ExtendedStatisticsResponse(StatisticsResponse):
     supplier_confirmation_stats: SupplierConfirmationStatistics
     supplier_bottlenecks: List[SupplierBottleneckAnalysis]
+
+class DispositionLineCreate(BaseModel):
+    action: str
+    quantity: int = Field(gt=0)
+    reason: Optional[str] = None
+    remark: Optional[str] = None
+
+class DispositionOrderCreate(BaseModel):
+    inventory_batch_id: int
+    inspection_id: Optional[int] = None
+    remark: Optional[str] = None
+    lines: List[DispositionLineCreate] = []
+
+class DispositionLineApproveRequest(BaseModel):
+    approver: str
+    remark: Optional[str] = None
+
+class DispositionLineRejectRequest(BaseModel):
+    approver: str
+    remark: Optional[str] = None
+
+class RecheckResultSubmit(BaseModel):
+    sample_size: int = Field(gt=0)
+    defective_count: int = Field(ge=0)
+    pass_rate: float
+    result: str
+    inspector: Optional[str] = None
+    inspection_date: date
+    remark: Optional[str] = None
+
+class DispositionLine(BaseModel):
+    id: int
+    order_id: int
+    line_no: int
+    action: str
+    quantity: int
+    status: str
+    reason: Optional[str] = None
+    approver: Optional[str] = None
+    approved_at: Optional[datetime] = None
+    result_batch_id: Optional[int] = None
+    recheck_sample_size: Optional[int] = None
+    recheck_defective_count: Optional[int] = None
+    recheck_pass_rate: Optional[float] = None
+    recheck_result: Optional[str] = None
+    recheck_inspector: Optional[str] = None
+    recheck_date: Optional[date] = None
+    executed_at: Optional[datetime] = None
+    remark: Optional[str] = None
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
+class DispositionOrder(BaseModel):
+    id: int
+    order_no: str
+    inventory_batch_id: int
+    inspection_id: Optional[int] = None
+    delivery_id: Optional[int] = None
+    material_id: int
+    total_quantity: int
+    sample_size: int
+    defective_count: int
+    pass_rate: float
+    inspection_result: str
+    conclusion_source: str
+    status: str
+    remark: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    class Config:
+        from_attributes = True
+
+class DispositionOrderDetail(DispositionOrder):
+    lines: List[DispositionLine] = []
+    allocated_quantity: int = 0
+    finalized_quantity: int = 0
+    remaining_quantity: int = 0
+
+class DispositionTraceItem(BaseModel):
+    line_id: int
+    line_no: int
+    action: str
+    quantity: int
+    status: str
+    child_batch_id: Optional[int] = None
+    child_batch_no: Optional[str] = None
+    child_available_quantity: Optional[int] = None
+    child_location: Optional[str] = None
+    child_is_quarantined: Optional[bool] = None
+    follow_up_order_no: Optional[str] = None
+
+class DispositionTrace(BaseModel):
+    order_no: str
+    inventory_batch_id: int
+    total_quantity: int
+    finalized_quantity: int
+    remaining_quantity: int
+    child_batch_quantity_sum: int
+    releasable_quantity: int
+    balanced: bool
+    items: List[DispositionTraceItem]

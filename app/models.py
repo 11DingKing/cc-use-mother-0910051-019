@@ -164,11 +164,65 @@ class InventoryBatch(Base):
     quarantine_reason = Column(String(300))
     location = Column(String(100))
     expire_date = Column(Date)
+    batch_no = Column(String(60), index=True)
+    parent_batch_id = Column(Integer, ForeignKey("inventory_batches.id"))
+    disposition_line_id = Column(Integer)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     delivery = relationship("Delivery", back_populates="inventory_batch")
     material = relationship("Material", back_populates="inventory_batches")
+    parent = relationship("InventoryBatch", remote_side=[id], backref="children",
+                          foreign_keys=[parent_batch_id])
+
+class DispositionOrder(Base):
+    __tablename__ = "disposition_orders"
+    id = Column(Integer, primary_key=True, index=True)
+    order_no = Column(String(50), unique=True, index=True, nullable=False)
+    inventory_batch_id = Column(Integer, ForeignKey("inventory_batches.id"), nullable=False, unique=True)
+    inspection_id = Column(Integer, ForeignKey("inspections.id"))
+    delivery_id = Column(Integer)
+    material_id = Column(Integer, ForeignKey("materials.id"), nullable=False)
+    total_quantity = Column(Integer, nullable=False)
+    sample_size = Column(Integer, nullable=False)
+    defective_count = Column(Integer, default=0)
+    pass_rate = Column(Float, nullable=False)
+    inspection_result = Column(String(20), nullable=False)
+    conclusion_source = Column(String(20), nullable=False, default="inspection")
+    status = Column(String(20), default="open")
+    remark = Column(String(300))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    lines = relationship("DispositionLine", back_populates="order",
+                         cascade="all, delete-orphan", order_by="DispositionLine.line_no")
+    inventory_batch = relationship("InventoryBatch", foreign_keys=[inventory_batch_id])
+    inspection = relationship("Inspection")
+
+class DispositionLine(Base):
+    __tablename__ = "disposition_lines"
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(Integer, ForeignKey("disposition_orders.id"), nullable=False)
+    line_no = Column(Integer, nullable=False)
+    action = Column(String(20), nullable=False)
+    quantity = Column(Integer, nullable=False)
+    status = Column(String(20), default="pending")
+    reason = Column(String(300))
+    approver = Column(String(50))
+    approved_at = Column(DateTime(timezone=True))
+    result_batch_id = Column(Integer, ForeignKey("inventory_batches.id"))
+    recheck_sample_size = Column(Integer)
+    recheck_defective_count = Column(Integer)
+    recheck_pass_rate = Column(Float)
+    recheck_result = Column(String(20))
+    recheck_inspector = Column(String(50))
+    recheck_date = Column(Date)
+    executed_at = Column(DateTime(timezone=True))
+    remark = Column(String(300))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    order = relationship("DispositionOrder", back_populates="lines")
+    result_batch = relationship("InventoryBatch", foreign_keys=[result_batch_id])
 
 class AlternativeMaterial(Base):
     __tablename__ = "alternative_materials"
