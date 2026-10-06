@@ -230,10 +230,110 @@ class InventoryBatchUpdate(BaseModel):
 
 class InventoryBatch(InventoryBatchBase):
     id: int
+    status: str = "normal"
+    origin_batch_id: Optional[int] = None
+    origin_disposition_id: Optional[int] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
     class Config:
         from_attributes = True
+
+# ==================== 检验处置单 ====================
+
+class DispositionDecisionCreate(BaseModel):
+    """处置决定分录：复检/让步接收/返工/退货/报废"""
+    decision_type: str = Field(description="re_inspect/concession/rework/return/scrap")
+    quantity: int
+    reason: Optional[str] = None
+
+class DispositionOrderCreate(BaseModel):
+    inventory_batch_id: int
+    remark: Optional[str] = None
+    created_by: Optional[str] = None
+    decisions: List[DispositionDecisionCreate] = []
+
+class DispositionApproveRequest(BaseModel):
+    approver: str
+    reason: Optional[str] = None
+
+class DispositionRejectRequest(BaseModel):
+    approver: str
+    reason: Optional[str] = None
+
+class ReinspectionCreate(BaseModel):
+    """复检结果：复检决定批准后登记，只追加新轮次，不改写首轮结论"""
+    sample_size: int
+    defective_count: int = 0
+    pass_rate: float
+    result: str = Field(description="passed/failed")
+    inspector: Optional[str] = None
+    inspection_date: Optional[date] = None
+    remark: Optional[str] = None
+
+class DispositionDecision(BaseModel):
+    id: int
+    disposition_order_id: int
+    decision_type: str
+    quantity: int
+    reason: Optional[str] = None
+    status: str
+    approver: Optional[str] = None
+    approved_at: Optional[datetime] = None
+    child_batch_id: Optional[int] = None
+    reinspect_result: Optional[str] = None
+    rework_completed_qty: Optional[int] = None
+    rework_completed_at: Optional[datetime] = None
+    rework_inspector: Optional[str] = None
+    reversed_at: Optional[datetime] = None
+    reverse_reason: Optional[str] = None
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
+class DispositionOrder(BaseModel):
+    id: int
+    order_no: str
+    inventory_batch_id: int
+    inspection_id: int
+    material_id: int
+    source_quantity: int
+    allocated_quantity: int
+    status: str
+    sample_size: int
+    defective_count: int
+    pass_rate: float
+    inspection_result: str
+    inspection_round: int
+    inspector: Optional[str] = None
+    inspection_date: date
+    remark: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: datetime
+    decisions: List[DispositionDecision] = []
+    class Config:
+        from_attributes = True
+
+class DispositionBalance(BaseModel):
+    """处置数量平衡：原始数量 = 已批准各去向之和 + 待决数量，任何时点恒等"""
+    inventory_batch_id: int
+    original_quantity: int
+    source_quantity: int
+    allocated_quantity: int
+    pending_quantity: int
+    approved_by_type: dict
+    available_for_new_disposition: int
+    is_balanced: bool
+    released_available_quantity: int
+
+class DispositionReverseRequest(BaseModel):
+    approver: str
+    reverse_reason: str
+
+class ReworkCompleteRequest(BaseModel):
+    """返工完成登记：合格数量放行回库；未修好部分留在隔离子批上再处置。一次性登记"""
+    completed_quantity: int
+    inspector: Optional[str] = None
+    remark: Optional[str] = None
 
 class AlternativeMaterialBase(BaseModel):
     material_id: int

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boolean, Text, Date
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boolean, Text, Date, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -135,8 +135,13 @@ class Delivery(Base):
     purchase_order = relationship("PurchaseOrder", back_populates="deliveries")
     supplier = relationship("Supplier", back_populates="deliveries")
     material = relationship("Material", back_populates="deliveries")
-    inspection = relationship("Inspection", back_populates="delivery", uselist=False)
-    inventory_batch = relationship("InventoryBatch", back_populates="delivery", uselist=False)
+    inspections = relationship(
+        "Inspection", back_populates="delivery",
+        cascade="all, delete-orphan", order_by="Inspection.id"
+    )
+    inventory_batches = relationship(
+        "InventoryBatch", back_populates="delivery", order_by="InventoryBatch.id"
+    )
 
 class Inspection(Base):
     __tablename__ = "inspections"
@@ -149,9 +154,33 @@ class Inspection(Base):
     inspector = Column(String(50))
     inspection_date = Column(Date, nullable=False)
     remark = Column(Text)
+    # 复检轮次：首轮为1，复检只追加不覆盖；is_latest 标记当前生效结论
+    round_no = Column(Integer, nullable=False, default=1, server_default="1")
+    is_latest = Column(Boolean, nullable=False, default=True, server_default="1")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    delivery = relationship("Delivery", back_populates="inspection")
+    delivery = relationship("Delivery", back_populates="inspections")
+    samples = relationship(
+        "InspectionSample", back_populates="inspection",
+        cascade="all, delete-orphan", order_by="InspectionSample.id"
+    )
+    disposition_orders = relationship("DispositionOrder", back_populates="inspection")
+
+class InspectionSample(Base):
+    """检验取样明细：处置单一旦建立即固化快照，复检取样只追加，保证原批次证据链完整"""
+    __tablename__ = "inspection_samples"
+    id = Column(Integer, primary_key=True, index=True)
+    inspection_id = Column(Integer, ForeignKey("inspections.id"), nullable=False)
+    round_no = Column(Integer, nullable=False, default=1)
+    sample_size = Column(Integer, nullable=False)
+    defective_count = Column(Integer, nullable=False, default=0)
+    pass_rate = Column(Float, nullable=False)
+    result = Column(String(20), nullable=False)
+    inspector = Column(String(50))
+    inspected_at = Column(DateTime(timezone=True), server_default=func.now())
+    remark = Column(Text)
+
+    inspection = relationship("Inspection", back_populates="samples")
 
 class InventoryBatch(Base):
     __tablename__ = "inventory_batches"
@@ -164,11 +193,93 @@ class InventoryBatch(Base):
     quarantine_reason = Column(String(300))
     location = Column(String(100))
     expire_date = Column(Date)
+    # 拆批溯源：处置决定批准后生成的子批次记录来源；原批次 origin_* 为空
+    origin_batch_id = Column(Integer, ForeignKey("inventory_batches.id"))
+    origin_disposition_id = Column(
+        Integer,
+        ForeignKey("disposition_decisions.id", use_alter=True, name="fk_batch_origin_decision"),
+        nullable=True
+    )
+    # 批次状态：normal（正常）/ quarantined（隔离）/ rework（返工中）/ returned（已退货）/ scrapped（已报废）
+    status = Column(String(20), nullable=False, default="normal", server_default="normal")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    delivery = relationship("Delivery", back_populates="inventory_batch")
+    delivery = relationship("Delivery", back_populates="inventory_batches")
     material = relationship("Material", back_populates="inventory_batches")
+    origin_batch = relationship(
+        "InventoryBatch", remote_side="InventoryBatch.id", foreign_keys=[origin_batch_id]
+    )
+    origin_decision = relationship(
+        "DispositionDecision", foreign_keys=[origin_disposition_id]
+    )
+
+class DispositionOrder(Base):
+    """检验处置单：不合格隔离后建立，固化取样与检验结论快照，数量分配到若干处置决定"""
+    __tablename__ = "disposition_orders"
+    id = Column(Integer, primary_key=True, index=True)
+    order_no = Column(String(50), unique=True, index=True, nullable=False)
+    inventory_batch_id = Column(Integer, ForeignKey("inventory_batches.id"), nullable=False)
+    inspection_id = Column(Integer, ForeignKey("inspections.id"), nullable=False)
+    material_id = Column(Integer, ForeignKey("materials.id"), nullable=False)
+    # 处置单覆盖的隔离数量（通常=原批次数量，复检推翻可只处置剩余部分）
+    source_quantity = Column(Integer, nullable=False)
+    # 已批准去向数量合计，随审批原子推进；closed 时必须等于 source_quantity
+    allocated_quantity = Column(Integer, nullable=False, default=0, server_default="0")
+    # 建单时固化的取样与检验结论快照，复检只追加新轮次，不改写本快照
+    sample_size = Column(Integer, nullable=False)
+    defective_count = Column(Integer, nullable=False, default=0)
+    pass_rate = Column(Float, nullable=False)
+    inspection_result = Column(String(20), nullable=False)
+    inspection_round = Column(Integer, nullable=False, default=1)
+    inspector = Column(String(50))
+    inspection_date = Column(Date, nullable=False)
+    status = Column(String(20), nullable=False, default="draft", server_default="draft")  # draft/approving/closed/cancelled
+    remark = Column(Text)
+    created_by = Column(String(50))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    inventory_batch = relationship("InventoryBatch", foreign_keys=[inventory_batch_id])
+    inspection = relationship("Inspection", back_populates="disposition_orders")
+    material = relationship("Material")
+    decisions = relationship(
+        "DispositionDecision", back_populates="disposition_order",
+        cascade="all, delete-orphan", order_by="DispositionDecision.id"
+    )
+
+class DispositionDecision(Base):
+    """处置决定：复检/让步接收/返工/退货/报废的数量分录，逐个审批，批准即生成可追溯子批次或终态记录"""
+    __tablename__ = "disposition_decisions"
+    __table_args__ = (
+        UniqueConstraint("disposition_order_id", "decision_type", name="uq_disposition_decision_type"),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    disposition_order_id = Column(Integer, ForeignKey("disposition_orders.id"), nullable=False)
+    # re_inspect（复检）/ concession（让步接收）/ rework（返工）/ return（退货）/ scrap（报废）
+    decision_type = Column(String(20), nullable=False)
+    quantity = Column(Integer, nullable=False)
+    reason = Column(String(300))
+    status = Column(String(20), nullable=False, default="pending", server_default="pending")  # pending/approved/rejected/reversed
+    approver = Column(String(50))
+    approved_at = Column(DateTime(timezone=True))
+    # 批准后生成的子批次（复检/让步/返工的数量去向载体）
+    child_batch_id = Column(Integer, ForeignKey("inventory_batches.id"), nullable=True)
+    # 复检结论（仅 decision_type=re_inspect）：pending_inspection/passed/failed
+    reinspect_result = Column(String(30), nullable=True)
+    # 返工完成登记（仅 decision_type=rework）：已完成放行数量
+    rework_completed_qty = Column(Integer, nullable=True)
+    rework_completed_at = Column(DateTime(timezone=True))
+    rework_inspector = Column(String(50))
+    reversed_at = Column(DateTime(timezone=True))
+    reverse_reason = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    disposition_order = relationship("DispositionOrder", back_populates="decisions")
+    child_batch = relationship(
+        "InventoryBatch", foreign_keys=[child_batch_id], post_update=True
+    )
 
 class AlternativeMaterial(Base):
     __tablename__ = "alternative_materials"

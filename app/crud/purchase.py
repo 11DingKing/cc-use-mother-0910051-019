@@ -139,7 +139,11 @@ class CRUDInventoryBatch(CRUDBase[InventoryBatch, InventoryBatchCreate, Inventor
         ).all()
 
     def get_quarantined_batches(self, db: Session) -> List[InventoryBatch]:
-        return db.query(InventoryBatch).filter(InventoryBatch.is_quarantined == True).all()
+        # 仅返回待处置的隔离批；返工中/退货/报废子批次有处置依据，不计入隔离视图
+        return db.query(InventoryBatch).filter(
+            InventoryBatch.is_quarantined == True,
+            InventoryBatch.status == "quarantined"
+        ).all()
 
     def get_available_batches(self, db: Session, material_id: int) -> List[InventoryBatch]:
         return db.query(InventoryBatch).filter(
@@ -154,6 +158,12 @@ class CRUDInventoryBatch(CRUDBase[InventoryBatch, InventoryBatchCreate, Inventor
             InventoryBatch.is_quarantined == False
         ).all()
         return sum(batch.available_quantity for batch in batches)
+
+    def get_children(self, db: Session, origin_batch_id: int) -> List[InventoryBatch]:
+        """拆批/返工生成的直接子批次"""
+        return db.query(InventoryBatch).filter(
+            InventoryBatch.origin_batch_id == origin_batch_id
+        ).order_by(InventoryBatch.id).all()
 
 crud_inventory_batch = CRUDInventoryBatch(InventoryBatch)
 
